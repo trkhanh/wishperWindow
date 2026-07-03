@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 
 function App() {
   const [filePath, setFilePath] = useState(null);
@@ -8,6 +8,17 @@ function App() {
   const [statusText, setStatusText] = useState('');
   const [activeTab, setActiveTab] = useState('segments'); // segments | fulltext
   const dropRef = useRef(null);
+  const segmentsContainerRef = useRef(null);
+
+  // Cleanup functions for IPC listeners
+  const cleanupRef = useRef([]);
+
+  // Auto-scroll to bottom when new segments arrive
+  useEffect(() => {
+    if (segmentsContainerRef.current && status === 'loading') {
+      segmentsContainerRef.current.scrollTop = segmentsContainerRef.current.scrollHeight;
+    }
+  }, [segments, status]);
 
   const formatTime = (seconds) => {
     const m = Math.floor(seconds / 60);
@@ -34,9 +45,29 @@ function App() {
   const handleTranscribe = async () => {
     if (!filePath) return;
 
+    // Run cleanup on any previous listeners
+    cleanupRef.current.forEach(fn => fn());
+    cleanupRef.current = [];
+
     setStatus('loading');
-    setStatusText('Transcribing... (this may take a while on first run as it downloads the model)');
+    setStatusText('Loading model...');
     setSegments([]);
+
+    // Set up streaming listeners before calling transcribeAudio
+    const cleanupProgress = window.electronAPI.onTranscribeProgress((segment) => {
+      setSegments(prev => [...prev, segment]);
+      setStatusText(`Transcribing... ${segments.length + 1} segments so far`);
+    });
+    cleanupRef.current.push(cleanupProgress);
+
+    const cleanupStderr = window.electronAPI.onTranscribeStderr((message) => {
+      // Show model loading info from stderr (e.g. "[whisper] Loading model...")
+      const trimmed = message.trim();
+      if (trimmed) {
+        setStatusText(trimmed.replace(/\[whisper\] /g, ''));
+      }
+    });
+    cleanupRef.current.push(cleanupStderr);
 
     try {
       const result = await window.electronAPI.transcribeAudio(filePath);
@@ -44,7 +75,7 @@ function App() {
         setStatus('error');
         setStatusText(result.error);
       } else {
-        setSegments(result);
+        // result is already handled by streaming; just set final status
         setStatus('done');
         setStatusText(`Done — ${result.length} segments`);
       }
@@ -175,7 +206,7 @@ function App() {
           </div>
 
           {activeTab === 'segments' ? (
-            <div className="transcript-container">
+            <div className="transcript-container" ref={segmentsContainerRef}>
               {segments.map((seg, i) => (
                 <div className="transcript-segment" key={i}>
                   <span className="timestamp">{formatTime(seg.start)} → {formatTime(seg.end)}</span>

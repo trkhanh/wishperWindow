@@ -1,0 +1,3 @@
+[whisper] Loading model... (cached after first download)
+[whisper] Model loaded. Transcribing 'C:\Users\tran_\Downloads\New with VAD...
+{"error": "Invalid argument: \"'C:\\\\Users\\\\tran_\\\\Downloads\\\\New\" returned 22"}

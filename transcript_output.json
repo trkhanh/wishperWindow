@@ -1,0 +1,3 @@
+[whisper] Loading model... (first run downloads ~500MB)
+[whisper] Model loaded. Transcribing  C:\Users\tran_\Downloads\New Recording 2.m4a...
+{"error": "Invalid argument: ' C:\\\\Users\\\\tran_\\\\Downloads\\\\New Recording 2.m4a' returned 22"}

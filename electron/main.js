@@ -1,6 +1,7 @@
 const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('path');
 const { spawn } = require('child_process');
+const readline = require('readline');
 
 let mainWindow;
 
@@ -55,7 +56,7 @@ ipcMain.handle('open-file-dialog', async () => {
   return result.filePaths[0];
 });
 
-// IPC: Transcribe audio file
+// IPC: Transcribe audio file with streaming output
 ipcMain.handle('transcribe-audio', async (event, filePath) => {
   return new Promise((resolve, reject) => {
     // Use the venv Python
@@ -75,32 +76,62 @@ ipcMain.handle('transcribe-audio', async (event, filePath) => {
       windowsHide: false,
     });
 
-    let data = '';
+    let resolved = false; // guard against double resolve/reject
     let errorData = '';
+    const allSegments = [];
 
-    py.stdout.on('data', (chunk) => {
-      data += chunk.toString('utf-8');
+    // Read stdout line by line for streaming NDJSON
+    const rl = readline.createInterface({ input: py.stdout, crlfDelay: Infinity });
+
+    rl.on('line', (line) => {
+      // stdout is closed now, ignore leftover lines after __done__
+      if (resolved) return;
+
+      try {
+        const parsed = JSON.parse(line);
+
+        // Check for the done marker
+        if (parsed.__done__) {
+          resolved = true;
+          resolve(allSegments);
+          return;
+        }
+
+        // Check for error
+        if (parsed.error) {
+          resolved = true;
+          reject(new Error(parsed.error));
+          return;
+        }
+
+        // It's a regular segment — push to array and notify renderer
+        allSegments.push(parsed);
+        event.sender.send('transcribe-progress', parsed);
+      } catch (parseErr) {
+        // Ignore non-JSON lines (shouldn't happen, but be safe)
+        console.error(`Failed to parse line: ${line}`);
+      }
     });
 
     py.stderr.on('data', (chunk) => {
       errorData += chunk.toString('utf-8');
+      // Forward stderr to renderer for progress info (model loading, etc.)
+      event.sender.send('transcribe-stderr', chunk.toString('utf-8'));
     });
 
     py.on('close', (code) => {
-      if (code !== 0) {
+      // Only reject if we haven't already resolved
+      if (!resolved) {
+        resolved = true;
         reject(new Error(`Python process exited with code ${code}: ${errorData}`));
-        return;
-      }
-      try {
-        const result = JSON.parse(data);
-        resolve(result);
-      } catch (e) {
-        reject(new Error(`Failed to parse Python output: ${e.message}\nRaw: ${data}\nStderr: ${errorData}`));
       }
     });
 
     py.on('error', (err) => {
-      reject(new Error(`Failed to start Python process: ${err.message}`));
+      if (!resolved) {
+        resolved = true;
+        reject(new Error(`Failed to start Python process: ${err.message}`));
+      }
     });
   });
 });
